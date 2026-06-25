@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sneckin</title>
+    <link rel="stylesheet" href="/public/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Sneckin">
+        <span class="brand-mark">S</span>
+        <span>Sneckin</span>
+      </a>
+      <nav class="top-actions" aria-label="Главное меню">
+        <a id="phoneLink" class="icon-link" href="tel:+48690755658" aria-label="Позвонить">+48 690 755 658</a>
+        <a class="ghost-link" href="/public/admin.html">Кабинет</a>
+        <button id="logoutButton" class="icon-button hidden" type="button" title="Выйти" aria-label="Выйти">x</button>
+      </nav>
+    </header>
+
+    <main class="page-shell">
+      <section class="shop-hero" aria-label="Sneckin">
+        <div class="hero-copy">
+          <span class="eyebrow">snacks to go</span>
+          <h1>Sneckin</h1>
+          <p>Хрустящие снеки, миксы и сладкие перекусы с быстрым заказом через Telegram.</p>
+        </div>
+        <img class="hero-image" src="/assets/hero-snacks.png" alt="Ассорти снеков Sneckin">
+      </section>
+
+      <section class="shop-layout">
+        <section class="catalog-area" aria-labelledby="catalogTitle">
+          <div class="section-head">
+            <div>
+              <span class="eyebrow">каталог</span>
+              <h2 id="catalogTitle">Снеки</h2>
+            </div>
+            <div id="categoryFilters" class="segmented" aria-label="Фильтр категорий"></div>
+          </div>
+          <div id="productGrid" class="product-grid" aria-live="polite"></div>
+        </section>
+
+        <aside class="cart-panel" aria-labelledby="cartTitle">
+          <div class="cart-head">
+            <div>
+              <span class="eyebrow">заказ</span>
+              <h2 id="cartTitle">Корзина</h2>
+            </div>
+            <span id="cartCount" class="count-pill">0</span>
+          </div>
+
+          <div id="cartItems" class="cart-items"></div>
+
+          <div class="total-row">
+            <span>Итого</span>
+            <strong id="cartTotal">0.00 PLN</strong>
+          </div>
+
+          <div id="authBox" class="auth-box"></div>
+
+          <form id="orderForm" class="checkout-form">
+            <label>
+              <span>Имя</span>
+              <input id="customerName" name="customerName" autocomplete="name" required>
+            </label>
+            <label>
+              <span>Телефон</span>
+              <input id="customerPhone" name="customerPhone" autocomplete="tel" value="+48 " required>
+            </label>
+            <label>
+              <span>Способ</span>
+              <select id="deliveryType" name="deliveryType">
+                <option value="Самовывоз">Самовывоз</option>
+                <option value="Доставка">Доставка</option>
+              </select>
+            </label>
+            <label>
+              <span>Адрес</span>
+              <input id="address" name="address" autocomplete="street-address" placeholder="Для доставки">
+            </label>
+            <label>
+              <span>Комментарий</span>
+              <textarea id="comment" name="comment" rows="3" placeholder="Время, подъезд, замены"></textarea>
+            </label>
+            <button id="submitOrder" class="primary-button" type="submit">Оформить заказ</button>
+          </form>
+        </aside>
+      </section>
+    </main>
+
+    <div id="toast" class="toast hidden" role="status"></div>
+    <script src="/app.js?v=20260623" defer></script>
+  </body>
+</html>

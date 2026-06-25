@@ -1,0 +1,13 @@
+{
+  "name": "sneckin-shop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sneckin snack shop with Telegram auth, admin catalog, and Telegram order notifications.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

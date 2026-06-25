@@ -1,0 +1,35 @@
+{
+  "products": [],
+  "orders": [
+    {
+      "id": "ord_mqqvyf82_8c082e",
+      "createdAt": "2026-06-23T16:55:45.554Z",
+      "status": "new",
+      "currency": "PLN",
+      "total": 100,
+      "customer": {
+        "name": "егор",
+        "phone": "+48 576230707",
+        "address": "ттмотаыш",
+        "comment": "ваацу",
+        "deliveryType": "Доставка",
+        "telegram": {
+          "id": "dev-owner",
+          "username": "local-owner",
+          "firstName": "Sneckin",
+          "lastName": "Owner"
+        }
+      },
+      "items": [
+        {
+          "productId": "prd_eef5c8e4-4416-4bdc-9e8c-b85b70264468",
+          "name": "eee",
+          "unit": "100 г",
+          "price": 100,
+          "quantity": 1,
+          "lineTotal": 100
+        }
+      ]
+    }
+  ]
+}
