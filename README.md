@@ -40,6 +40,17 @@ TELEGRAM_GROUP_CHAT_ID=-1001234567890
 
 После этого новые заказы будут сохраняться в `data/store.json` и отправляться в группу.
 
+## Онлайн-оплата (Stripe)
+
+Покупатель может оплатить заказ картой, BLIK или Przelewy24 на странице Stripe Checkout либо выбрать оплату при получении.
+
+1. Зарегистрируйтесь на `https://dashboard.stripe.com` и включите в настройках способы оплаты BLIK и Przelewy24.
+2. В разделе Developers → API keys скопируйте секретный ключ в `STRIPE_SECRET_KEY`.
+3. В разделе Developers → Webhooks добавьте адрес `https://ваш-домен/api/payments/stripe/webhook` с событиями `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`. Signing secret (`whsec_...`) запишите в `STRIPE_WEBHOOK_SECRET`.
+4. Укажите `PUBLIC_URL` — адрес сайта, куда Stripe вернет покупателя после оплаты.
+
+Заказ с онлайн-оплатой отправляется в Telegram-группу только после подтверждения оплаты. Статус оплаты виден в `/admin`. Для проверки используйте тестовые ключи (`sk_test_...`).
+
 ## Кабинет владельца
 
 Откройте `/admin`. В продакшене вход владельца идет через Telegram: пользователь получит роль владельца, если его Telegram ID есть в `TELEGRAM_OWNER_IDS`.

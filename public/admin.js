@@ -186,6 +186,7 @@ function renderOrders() {
           <div>
             <strong>${escapeHtml(order.customer.name)}</strong>
             <span>${escapeHtml(items)}</span>
+            <span>Оплата: ${escapeHtml(formatPayment(order.payment))}</span>
           </div>
           <div>
             <strong>${formatMoney(order.total)}</strong>
@@ -195,6 +196,12 @@ function renderOrders() {
       `;
     })
     .join("");
+}
+
+function formatPayment(payment) {
+  if (!payment || payment.method !== "online") return "при получении";
+  const statuses = { pending: "ожидает", paid: "оплачено онлайн", failed: "ошибка", expired: "не оплачено" };
+  return statuses[payment.status] || payment.status;
 }
 
 async function saveProduct(event) {

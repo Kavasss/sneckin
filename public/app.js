@@ -28,9 +28,37 @@ async function init() {
   els.phoneLink.textContent = state.config.phone;
 
   renderAuthBox();
+  renderPaymentOptions();
   renderCategories();
   renderProducts();
   renderCart();
+  handlePaymentReturn();
+}
+
+function renderPaymentOptions() {
+  if (!state.config.onlinePaymentReady) return;
+  els.paymentMethod.insertAdjacentHTML(
+    "afterbegin",
+    `<option value="online">Онлайн: карта, BLIK, Przelewy24</option>`
+  );
+  els.paymentMethod.value = "online";
+}
+
+function handlePaymentReturn() {
+  const params = new URLSearchParams(window.location.search);
+  const payment = params.get("payment");
+  if (!payment) return;
+
+  if (payment === "success") {
+    state.cart = {};
+    saveCart();
+    renderCart();
+    toast("Спасибо! Оплата прошла, заказ передан в работу.");
+  } else if (payment === "cancelled") {
+    toast("Оплата отменена. Корзина сохранена — можно попробовать снова.");
+  }
+
+  window.history.replaceState(null, "", window.location.pathname);
 }
 
 function bindElements() {
@@ -43,6 +71,7 @@ function bindElements() {
   els.cartTotal = document.querySelector("#cartTotal");
   els.authBox = document.querySelector("#authBox");
   els.orderForm = document.querySelector("#orderForm");
+  els.paymentMethod = document.querySelector("#paymentMethod");
   els.toast = document.querySelector("#toast");
 }
 
@@ -226,6 +255,7 @@ async function submitOrder(event) {
     customerName: document.querySelector("#customerName").value,
     customerPhone: document.querySelector("#customerPhone").value,
     deliveryType: document.querySelector("#deliveryType").value,
+    paymentMethod: els.paymentMethod.value,
     address: document.querySelector("#address").value,
     comment: document.querySelector("#comment").value,
     items: lines.map((line) => ({
@@ -237,14 +267,24 @@ async function submitOrder(event) {
   const submitButton = document.querySelector("#submitOrder");
   submitButton.disabled = true;
   submitButton.textContent = "Отправляем...";
+  let redirecting = false;
 
   try {
     const response = await api("/api/orders", { method: "POST", body: payload });
+
+    if (response.checkoutUrl) {
+      redirecting = true;
+      submitButton.textContent = "Переходим к оплате...";
+      window.location.href = response.checkoutUrl;
+      return;
+    }
+
     state.cart = {};
     saveCart();
     renderCart();
     els.orderForm.reset();
     document.querySelector("#customerPhone").value = "+48 ";
+    els.paymentMethod.value = els.paymentMethod.options[0].value;
 
     if (response.telegram.sent) {
       toast("Заказ отправлен в Telegram.");
@@ -254,8 +294,10 @@ async function submitOrder(event) {
   } catch (error) {
     toast(error.message || "Не удалось оформить заказ.");
   } finally {
-    submitButton.disabled = false;
-    submitButton.textContent = "Оформить заказ";
+    if (!redirecting) {
+      submitButton.disabled = false;
+      submitButton.textContent = "Оформить заказ";
+    }
   }
 }
 

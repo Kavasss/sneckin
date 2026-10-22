@@ -32,7 +32,16 @@ const CONFIG = {
   telegramGroupChatId: process.env.TELEGRAM_GROUP_CHAT_ID || "",
   telegramGroupInviteUrl: process.env.TELEGRAM_GROUP_INVITE_URL || "https://t.me/+RE21y_qYc1dkNTg6",
   devAdminCode: process.env.DEV_ADMIN_CODE || "",
-  sessionSecret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex")
+  sessionSecret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex"),
+  publicUrl: String(process.env.PUBLIC_URL || "").trim().replace(/\/+$/, ""),
+  stripeSecretKey: process.env.STRIPE_SECRET_KEY || "",
+  stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET || "",
+  stripePaymentMethods: parseCsv(process.env.STRIPE_PAYMENT_METHODS || "")
+};
+
+const PAYMENT_METHODS = {
+  online: "Онлайн (карта, BLIK, Przelewy24)",
+  cash: "При получении"
 };
 
 const PORT = Number(process.env.PORT || 3000);
@@ -97,6 +106,7 @@ async function routeApi(req, res, requestUrl) {
       telegramGroupReady: Boolean(CONFIG.telegramBotToken && CONFIG.telegramGroupChatId),
       telegramGroupInviteUrl: CONFIG.telegramGroupInviteUrl,
       devAuthAvailable: Boolean(CONFIG.devAdminCode),
+      onlinePaymentReady: isOnlinePaymentReady(),
       user: session ? session.user : null
     });
     return;
@@ -275,8 +285,24 @@ async function routeApi(req, res, requestUrl) {
 
     const payload = await readJsonBody(req);
     const order = await createOrder(payload, session.user);
+
+    if (order.payment.method === "online") {
+      const checkout = await startOnlinePayment(order, req);
+      sendJson(res, 201, {
+        order: checkout.order,
+        checkoutUrl: checkout.url,
+        telegram: { sent: false, reason: "awaiting_payment" }
+      });
+      return;
+    }
+
     const telegram = await sendOrderToTelegram(order);
     sendJson(res, 201, { order, telegram });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/payments/stripe/webhook") {
+    await handleStripeWebhook(req, res);
     return;
   }
 
@@ -445,11 +471,15 @@ async function createOrder(payload, user) {
   const address = cleanText(payload.address, 240);
   const comment = cleanText(payload.comment, 500);
   const deliveryType = cleanText(payload.deliveryType || "pickup", 40);
+  const paymentMethod = payload.paymentMethod === "online" ? "online" : "cash";
 
   if (!customerName) throw httpError(400, "customer_name_required", "Укажите имя.");
   if (!customerPhone) throw httpError(400, "customer_phone_required", "Укажите телефон.");
   if (!Array.isArray(payload.items) || payload.items.length === 0) {
     throw httpError(400, "empty_cart", "Корзина пустая.");
+  }
+  if (paymentMethod === "online" && !isOnlinePaymentReady()) {
+    throw httpError(400, "online_payment_unavailable", "Онлайн-оплата пока не подключена. Выберите оплату при получении.");
   }
 
   return updateStore((store) => {
@@ -482,6 +512,10 @@ async function createOrder(payload, user) {
       status: "new",
       currency: CONFIG.currency,
       total,
+      payment: {
+        method: paymentMethod,
+        status: paymentMethod === "online" ? "pending" : "on_delivery"
+      },
       customer: {
         name: customerName,
         phone: customerPhone,
@@ -518,6 +552,186 @@ function normalizeProduct(payload) {
   }
 
   return { name, description, category, unit, image, price, available };
+}
+
+function isOnlinePaymentReady() {
+  return Boolean(CONFIG.stripeSecretKey && CONFIG.stripeWebhookSecret);
+}
+
+function getPublicUrl(req) {
+  if (CONFIG.publicUrl) return CONFIG.publicUrl;
+  const proto = String(req.headers["x-forwarded-proto"] || "http").split(",")[0].trim();
+  return `${proto}://${req.headers.host || `localhost:${PORT}`}`;
+}
+
+async function startOnlinePayment(order, req) {
+  const baseUrl = getPublicUrl(req);
+  const params = {
+    mode: "payment",
+    client_reference_id: order.id,
+    "metadata[order_id]": order.id,
+    "payment_intent_data[metadata][order_id]": order.id,
+    success_url: `${baseUrl}/?payment=success&order=${encodeURIComponent(order.id)}`,
+    cancel_url: `${baseUrl}/?payment=cancelled&order=${encodeURIComponent(order.id)}`
+  };
+
+  CONFIG.stripePaymentMethods.forEach((method, index) => {
+    params[`payment_method_types[${index}]`] = method;
+  });
+
+  order.items.forEach((item, index) => {
+    const prefix = `line_items[${index}]`;
+    params[`${prefix}[quantity]`] = item.quantity;
+    params[`${prefix}[price_data][currency]`] = order.currency.toLowerCase();
+    params[`${prefix}[price_data][unit_amount]`] = Math.round(item.price * 100);
+    params[`${prefix}[price_data][product_data][name]`] = `${item.name} (${item.unit})`;
+  });
+
+  let checkoutSession;
+  try {
+    checkoutSession = await stripeApi("/v1/checkout/sessions", params);
+  } catch (error) {
+    console.error("Stripe checkout failed:", error.message);
+    await updateOrderPayment(order.id, (payment) => {
+      payment.status = "failed";
+    });
+    throw httpError(502, "payment_start_failed", "Не удалось открыть оплату. Попробуйте еще раз или выберите оплату при получении.");
+  }
+
+  const updated = await updateOrderPayment(order.id, (payment) => {
+    payment.stripeSessionId = checkoutSession.id;
+  });
+
+  return { order: updated || order, url: checkoutSession.url };
+}
+
+async function handleStripeWebhook(req, res) {
+  if (!isOnlinePaymentReady()) {
+    sendJson(res, 503, { error: "payments_not_configured", message: "Онлайн-оплата не настроена." });
+    return;
+  }
+
+  const rawBody = await readRawBody(req, MAX_BODY_BYTES);
+  if (!verifyStripeSignature(rawBody, req.headers["stripe-signature"])) {
+    sendJson(res, 400, { error: "bad_signature", message: "Подпись Stripe не прошла проверку." });
+    return;
+  }
+
+  let event;
+  try {
+    event = JSON.parse(rawBody.toString("utf8"));
+  } catch {
+    sendJson(res, 400, { error: "bad_json", message: "Некорректный JSON." });
+    return;
+  }
+
+  const checkoutSession = event.data && event.data.object;
+  const orderId = checkoutSession && (checkoutSession.client_reference_id || (checkoutSession.metadata || {}).order_id);
+
+  if (orderId && event.type.startsWith("checkout.session.")) {
+    let nextStatus = "";
+    if (event.type === "checkout.session.completed" && checkoutSession.payment_status === "paid") nextStatus = "paid";
+    if (event.type === "checkout.session.async_payment_succeeded") nextStatus = "paid";
+    if (event.type === "checkout.session.async_payment_failed") nextStatus = "failed";
+    if (event.type === "checkout.session.expired") nextStatus = "expired";
+
+    if (nextStatus) {
+      let becamePaid = false;
+      const order = await updateOrderPayment(orderId, (payment) => {
+        if (payment.method !== "online" || payment.status === "paid") return;
+        becamePaid = nextStatus === "paid";
+        payment.status = nextStatus;
+        if (becamePaid) {
+          payment.paidAt = new Date().toISOString();
+          payment.stripePaymentIntentId = checkoutSession.payment_intent || "";
+        }
+      });
+
+      if (order && becamePaid) await sendOrderToTelegram(order);
+    }
+  }
+
+  sendJson(res, 200, { received: true });
+}
+
+function verifyStripeSignature(rawBody, header) {
+  const parts = {};
+  for (const item of String(header || "").split(",")) {
+    const [key, value] = item.split("=");
+    if (!key || !value) continue;
+    (parts[key.trim()] = parts[key.trim()] || []).push(value.trim());
+  }
+
+  const timestamp = Number((parts.t || [])[0]);
+  if (!Number.isFinite(timestamp) || Math.abs(Date.now() / 1000 - timestamp) > 5 * 60) return false;
+
+  const expected = crypto
+    .createHmac("sha256", CONFIG.stripeWebhookSecret)
+    .update(`${timestamp}.${rawBody.toString("utf8")}`)
+    .digest("hex");
+
+  return (parts.v1 || []).some((signature) => safeEqualHex(expected, signature));
+}
+
+function updateOrderPayment(orderId, mutator) {
+  return updateStore((store) => {
+    const order = store.orders.find((item) => item.id === orderId);
+    if (!order) return null;
+    order.payment = order.payment || { method: "cash", status: "on_delivery" };
+    mutator(order.payment);
+    return order;
+  });
+}
+
+function stripeApi(apiPath, params) {
+  return new Promise((resolve, reject) => {
+    const body = new URLSearchParams(
+      Object.entries(params).map(([key, value]) => [key, String(value)])
+    ).toString();
+    const req = https.request(
+      {
+        hostname: "api.stripe.com",
+        path: apiPath,
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${CONFIG.stripeSecretKey}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+          "Content-Length": Buffer.byteLength(body)
+        },
+        timeout: 15000
+      },
+      (res) => {
+        let data = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          data += chunk;
+        });
+        res.on("end", () => {
+          try {
+            const parsed = JSON.parse(data);
+            if (res.statusCode >= 400) reject(new Error((parsed.error && parsed.error.message) || "Stripe API error"));
+            else resolve(parsed);
+          } catch {
+            reject(new Error("Stripe API returned an unreadable response"));
+          }
+        });
+      }
+    );
+
+    req.on("timeout", () => {
+      req.destroy(new Error("Stripe API request timed out"));
+    });
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+function formatPaymentStatus(payment) {
+  if (!payment) return "При получении";
+  if (payment.method === "cash") return "При получении";
+  const statuses = { pending: "ожидает оплаты", paid: "оплачено", failed: "ошибка оплаты", expired: "не оплачено" };
+  return `Онлайн — ${statuses[payment.status] || payment.status}`;
 }
 
 async function sendOrderToTelegram(order) {
@@ -564,6 +778,7 @@ function formatOrderMessage(order) {
     `Телефон: ${escapeHtml(customer.phone)}`,
     `Telegram: ${escapeHtml(telegramName)} (${escapeHtml(customer.telegram.id)})`,
     `Способ: ${escapeHtml(customer.deliveryType)}`,
+    `Оплата: ${escapeHtml(formatPaymentStatus(order.payment))}`,
     customer.address ? `Адрес: ${escapeHtml(customer.address)}` : "",
     customer.comment ? `Комментарий: ${escapeHtml(customer.comment)}` : "",
     "",
